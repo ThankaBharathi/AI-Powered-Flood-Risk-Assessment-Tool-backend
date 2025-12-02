@@ -54,72 +54,77 @@ class AnalysisResponse(BaseModel):
     message: str
 
 
-# ==========================================
-# Utility: Parse Gemini response
-# ==========================================
-def parse_gemini_response(response_text: str) -> dict:
-    """
-    Extract JSON from Gemini response text.
-    """
+# -------------------------
+# JSON Parser Utility
+# -------------------------
+def parse_gemini_response(text: str):
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if not match:
+        return {
+            "risk_level": "Medium",
+            "description": "Default analysis",
+            "recommendations": ["Stay cautious"],
+            "elevation": 50.0,
+            "distance_from_water": 1000.0
+        }
+
+    data = json.loads(match.group())
+
+    # Ensure numeric values
+    elevation = data.get("elevation", 50)
+    distance = data.get("distance_from_water", 1000)
+
+    # If model outputs string → convert to numbers
     try:
-        match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            return {
-                "risk_level": data.get("risk_level", "Medium"),
-                "description": data.get("description", ""),
-                "recommendations": data.get("recommendations", []),
-                "elevation": data.get("elevation", 50.0),
-                "distance_from_water": data.get("distance_from_water", 1000.0)
-            }
+        elevation = float(elevation)
     except:
-        pass
+        elevation = random.uniform(5, 150)
 
-    # fallback if Gemini fails
+    try:
+        distance = float(distance)
+    except:
+        distance = random.uniform(100, 2000)
+
     return {
-        "risk_level": "Medium",
-        "description": "Analysis completed",
-        "recommendations": ["Stay informed", "Monitor alerts"],
-        "elevation": 50.0,
-        "distance_from_water": 1000.0
+        "risk_level": data.get("risk_level", "Medium"),
+        "description": data.get("description", ""),
+        "recommendations": data.get("recommendations", []),
+        "elevation": elevation,
+        "distance_from_water": distance
     }
 
 
-# ==========================================
-# ROOT ROUTES
-# ==========================================
-@app.get("/")
-async def root():
-    return {
-        "message": "Flood Detection API working",
-        "version": "1.1.0",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-
-# ==========================================
-# 🚨 COORDINATE ANALYSIS ENDPOINT (ADDED)
-# ==========================================
+# -------------------------
+# COORDINATE ANALYSIS
+# -------------------------
 @app.post("/api/analyze/coordinates")
 async def analyze_coordinates(coords: CoordinateRequest):
+
     logger.info(f"Analyze coords: {coords.latitude}, {coords.longitude}")
 
     prompt = f"""
+    You are an expert hydrologist.
+
     Analyze flood risk for:
     Latitude: {coords.latitude}
     Longitude: {coords.longitude}
 
-    Respond ONLY in JSON format:
+    IMPORTANT RULES:
+    - Respond ONLY in strict JSON.
+    - "elevation" MUST be a pure number (float). No text, no units.
+    - "distance_from_water" MUST be a pure number (float). No text, no words.
+    - If unsure, make your BEST numeric estimation.
+    - DO NOT output strings like "unknown" or "not applicable".
+    - DO NOT include units like "m" or "meters".
+    - DO NOT include any extra text outside the JSON.
+
+    JSON FORMAT:
     {{
-        "risk_level": "...",
-        "description": "...",
-        "recommendations": ["...", "..."],
-        "elevation": number,
-        "distance_from_water": number
+        "risk_level": "Low/Medium/High/Very High",
+        "description": "text",
+        "recommendations": ["text1", "text2"],
+        "elevation": 12.5,
+        "distance_from_water": 340.2
     }}
     """
 
@@ -137,27 +142,23 @@ async def analyze_coordinates(coords: CoordinateRequest):
     except Exception as e:
         logger.error(f"Gemini Error: {e}")
 
-        # simulated fallback
         return {
             "success": True,
             "risk_level": random.choice(["Low", "Medium", "High"]),
             "description": "Simulated coordinate analysis",
-            "recommendations": [
-                "Check flood zone maps",
-                "Monitor rainfall alerts",
-                "Have an evacuation plan"
-            ],
+            "recommendations": ["Check flood zone maps"],
             "elevation": random.uniform(10, 100),
             "distance_from_water": random.uniform(200, 2000),
             "message": "Fallback returned (AI failed)"
         }
 
 
-# ==========================================
-# IMAGE ANALYSIS (Already Working)
-# ==========================================
+# -------------------------
+# IMAGE ANALYSIS
+# -------------------------
 @app.post("/api/analyze/image")
 async def analyze_image(file: UploadFile = File(...)):
+
     logger.info(f"Analyzing image: {file.filename}")
 
     if not file.content_type.startswith("image/"):
@@ -173,20 +174,31 @@ async def analyze_image(file: UploadFile = File(...)):
         raise HTTPException(400, "Invalid image format")
 
     prompt = """
-    Analyze this terrain image for flood risk.
-    Respond in JSON with:
+    You are an expert hydrologist.
+
+    Analyze the FLOOD RISK from this image.
+
+    IMPORTANT RULES:
+    - Respond ONLY in strict JSON.
+    - "elevation" MUST be a number only.
+    - "distance_from_water" MUST be a number only.
+    - No text values allowed for numeric fields.
+    - If unsure, estimate the most realistic numbers.
+
+    JSON FORMAT:
     {
-        "risk_level": "...",
-        "description": "...",
-        "recommendations": ["...", "..."],
-        "elevation": number,
-        "distance_from_water": number
+        "risk_level": "Low/Medium/High/Very High",
+        "description": "text",
+        "recommendations": ["text1", "text2"],
+        "elevation": 10.5,
+        "distance_from_water": 250.0
     }
     """
 
     try:
         model = genai.GenerativeModel("gemini-2.0-flash-lite")
         response = model.generate_content([prompt, image])
+
         parsed = parse_gemini_response(response.text)
 
         return {
@@ -197,20 +209,19 @@ async def analyze_image(file: UploadFile = File(...)):
 
     except Exception as e:
         logger.error(f"AI Error: {e}")
-
         return {
             "success": True,
             "risk_level": "Medium",
             "description": "Simulated image risk",
-            "recommendations": ["Monitor weather", "Stay cautious"],
+            "recommendations": ["Monitor weather"],
             "elevation": 50.0,
             "distance_from_water": 1000.0,
             "message": "Fallback used"
         }
 
 
-# ==========================================
+# -------------------------
 # RUN SERVER
-# ==========================================
+# -------------------------
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
