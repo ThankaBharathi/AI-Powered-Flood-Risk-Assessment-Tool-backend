@@ -39,10 +39,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -------------------------
+# ROOT ROUTE
+# -------------------------
+@app.get("/")
+def home():
+    return {"message": "Flood Detection API is running successfully!"}
+
+
+# -------------------------
 # Models
+# -------------------------
 class CoordinateRequest(BaseModel):
     latitude: float
     longitude: float
+
 
 class AnalysisResponse(BaseModel):
     success: bool
@@ -74,7 +85,6 @@ def parse_gemini_response(text: str):
     elevation = data.get("elevation", 50)
     distance = data.get("distance_from_water", 1000)
 
-    # If model outputs string → convert to numbers
     try:
         elevation = float(elevation)
     except:
